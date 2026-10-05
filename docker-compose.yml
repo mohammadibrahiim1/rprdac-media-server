@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  media-backend:
+    build: .
+    container_name: media_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      - PORT=8000
+      - STREAM_JWT_SECRET=super_secret_shared_jwt_key_2026
+      - MAIN_FRONTEND_URL=https://yourdomain.com
+
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: media_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./storage:/var/www/storage:ro
+    depends_on:
+      - media-backend

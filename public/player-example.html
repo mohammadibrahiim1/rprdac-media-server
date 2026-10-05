@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Secure HLS Player Test</title>
+    <!-- HLS.js Library -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        .video-container { position: relative; width: 640px; background: #000; }
+        .watermark { 
+            position: absolute; top: 20px; left: 20px; 
+            color: rgba(255, 255, 255, 0.4); font-family: sans-serif; 
+            pointer-events: none; user-select: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Modular Secure Stream Tester</h2>
+    <div class="video-container">
+        <video id="videoPlayer" controls controlsList="nodownload" width="640"></video>
+        <!-- Dynamic Watermark Overlay -->
+        <div class="watermark" id="watermark">User: test_student | IP: 192.168.1.1</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('videoPlayer');
+        
+        // 1. Dynamic Token (Testing-এর জন্য Node Backend থেকে আনা বা জেনারেট করা)
+        const token = "YOUR_SHORT_LIVED_JWT_TOKEN";
+        const courseId = "course-1";
+        const lessonId = "lesson-1";
+        const streamUrl = `/hls-output/${courseId}/${lessonId}/index.m3u8?token=${token}`;
+
+        // 2. Disable Right Click on Video
+        video.addEventListener('contextmenu', e => e.preventDefault());
+
+        // 3. Initialize HLS Player with Dynamic Token Injection
+        if (Hls.isSupported()) {
+            const hls = new Hls({
+                xhrSetup: function (xhr, url) {
+                    // IDM ও Direct Link Download আটকানোর জন্য প্রতি Segment & Key Request-এ Token পাস করা
+                    if (!url.includes('token=')) {
+                        const newUrl = url.includes('?') ? `${url}&token=${token}` : `${url}?token=${token}`;
+                        xhr.open('GET', newUrl, true);
+                    }
+                }
+            });
+
+            hls.loadSource(streamUrl);
+            hls.attachMedia(video);
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Safari Support
+            video.src = streamUrl;
+        }
+    </script>
+</body>
+</html>
