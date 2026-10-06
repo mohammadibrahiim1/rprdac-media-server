@@ -1,86 +1,69 @@
-import ffmpeg from 'fluent-ffmpeg';
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
+import { Request, Response, NextFunction } from "express";
 
-interface TranscodeResult {
-  success: boolean;
-  playlistPath: string;
+import jwt from "jsonwebtoken";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: any;
+    }
+  }
 }
 
-export const convertToEncryptedHLS = (
-  inputFile: string,
-  courseId: string,
-  lessonId: string
-): Promise<TranscodeResult> => {
-  return new Promise((resolve, reject) => {
-    const outputDir = path.join(process.cwd(), 'storage/hls-output', courseId, lessonId);
-    const keysDir = path.join(process.cwd(), 'storage/keys', courseId, lessonId);
+interface DecodedToken {
+  userId: string;
+  role: string;
+  courseId?: string;
+  [key: string]: any;
+}
 
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-    if (!fs.existsSync(keysDir)) fs.mkdirSync(keysDir, { recursive: true });
-
-    // 16-Byte AES Key Generation
-    const aesKey = crypto.randomBytes(16);
-    const keyPath = path.join(keysDir, 'video.key');
-    fs.writeFileSync(keyPath, aesKey);
-
-    // Key Info file creation for FFmpeg
-    const keyURI = `https://video.yourdomain.com/api/v1/key/${courseId}/${lessonId}`;
-    const keyInfoPath = path.join(keysDir, 'enc.keyinfo');
-    const keyInfoContent = `${keyURI}\n${keyPath}`;
-    fs.writeFileSync(keyInfoPath, keyInfoContent);
-
-    ffmpeg(inputFile)
-      .outputOptions([
-        '-profile:v main',
-        '-crf 22',
-        '-preset ultrafast',
-        '-g 48',
-        '-keyint_min 48',
-        '-hls_time 4',
-        '-hls_playlist_type vod',
-        `-hls_key_info_file ${keyInfoPath}`,
-        `-hls_segment_filename ${outputDir}/segment_%03d.ts`
-      ])
-      .output(path.join(outputDir, 'index.m3u8'))
-      .on('end', () => {
-        if (fs.existsSync(keyInfoPath)) fs.unlinkSync(keyInfoPath);
-        if (fs.existsSync(inputFile)) fs.unlinkSync(inputFile);
-
-        resolve({
-          success: true,
-          playlistPath: `/hls-output/${courseId}/${lessonId}/index.m3u8`
-        });
-      })
-      .on('error', (err) => {
-        reject(err);
-      })
-      .run();
-  });
-};
-
-
-
-
-
-
-
-import { Request, Response, NextFunction } from 'express';
-
-export const authStream = (req: Request, res: Response, next: NextFunction): void => {
+export const authStream = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void => {
   try {
-    // আপনার অথেন্টিকেশন লজিক এখানে থাকবে (যেমন টোকেন ভেরিফিকেশন)
-    const token = req.headers.authorization?.split(' ')[1];
+    let token = "";
+
+    const authHeader = req.headers.authorization;
+
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.split(" ")[1];
+    } else if (req.query && req.query.token) {
+      token = req.query.token as string;
+    }
 
     if (!token) {
-      res.status(401).json({ error: 'Access denied. No token provided.' });
+      res.status(401).json({ error: "Access denied." });
       return;
     }
 
-    // টোকেন ভ্যালিড হলে পরবর্তী ধাপে যাবে
+    const secretKey = process.env.STREAM_JWT_SECRET || process.env.JWT_SK;
+
+    if (!secretKey) {
+      res.status(500).json({ error: "Internal server error." });
+      return;
+    }
+
+    const decoded = jwt.verify(token, secretKey) as DecodedToken;
+
+    req.user = decoded;
+
     next();
   } catch (error) {
-    res.status(403).json({ error: 'Invalid or expired token.' });
+    // Token er meyad sesh hoye gele user-ke friendly message dewa
+    if (error instanceof jwt.TokenExpiredError) {
+      res.status(403).json({
+        error:
+          "Session Expired. Please login again to continue watching the video.",
+      });
+      return;
+    }
+
+    // Onnanno invalid token er khetre
+    res
+      .status(403)
+      .json({ error: "Ei video-ti dekhar bohidhona (permission) apnar nei." });
+    return;
   }
 };
