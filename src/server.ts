@@ -19,11 +19,13 @@ app.use(
 app.use(express.json());
 
 // 1. Dynamic Key Server Route (Protected by Stream Token)
-app.get("/api/v1/key/:courseId/:lessonId", keyRoutes);
+app.get("/api/v1/key", keyRoutes);
 
 // 2. Transcode Trigger API (Called by Main Backend or Admin API)
 app.post("/api/v1/transcode", async (req: Request, res: Response) => {
   const { inputFilePath, courseId, lessonId } = req.body;
+
+  console.log("Received inputFilePath:", inputFilePath);
 
   if (!inputFilePath || !courseId || !lessonId) {
     return res
@@ -37,6 +39,7 @@ app.post("/api/v1/transcode", async (req: Request, res: Response) => {
       courseId,
       lessonId,
     );
+    console.log("result", result);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
