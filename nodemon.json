@@ -2,7 +2,7 @@
 {
   "watch": ["src"],
   "ext": "ts,json",
-  "ignore": [
+  "ignore": [ 
     "storage/**",
     "storage/**/*",
     "node_modules/**",

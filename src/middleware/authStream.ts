@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from "express";
-
 import jwt from "jsonwebtoken";
 
 declare global {
@@ -46,24 +45,18 @@ export const authStream = (
     }
 
     const decoded = jwt.verify(token, secretKey) as DecodedToken;
-
     req.user = decoded;
 
     next();
   } catch (error) {
-    // Token er meyad sesh hoye gele user-ke friendly message dewa
     if (error instanceof jwt.TokenExpiredError) {
       res.status(403).json({
-        error:
-          "Session Expired. Please login again to continue watching the video.",
+        error: "Session Expired. Please login again to continue watching.",
       });
       return;
     }
 
-    // Onnanno invalid token er khetre
-    res
-      .status(403)
-      .json({ error: "Ei video-ti dekhar bohidhona (permission) apnar nei." });
+    res.status(403).json({ error: "Permission denied for this video." });
     return;
   }
 };

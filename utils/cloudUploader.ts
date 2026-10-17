@@ -1,69 +1,181 @@
-import { createClient } from "webdav";
-// @ts-ignore Node.js typings are not configured in this project.
-import fs from "fs";
-// @ts-ignore Node.js typings are not configured in this project.
-import * as path from "path";
+import { createClient, WebDAVClient } from "webdav";
+import fs from "node:fs";
+import * as path from "node:path";
 
-declare const process: {
-  env: Record<string, string | undefined>;
+const getClient = (): WebDAVClient => {
+  const webdavUrl = process.env.NEXTCLOUD_WEBDAV_URL;
+  const username = process.env.NEXTCLOUD_USER;
+  const password = process.env.NEXTCLOUD_PASSWORD;
+
+  // 1. Check environment configuration
+  console.log("[WebDAV] Configuration check:", {
+    urlConfigured: Boolean(webdavUrl),
+    usernameConfigured: Boolean(username),
+    passwordConfigured: Boolean(password),
+  });
+
+  if (!webdavUrl || !username || !password) {
+    throw new Error(
+      "Missing Nextcloud WebDAV configuration in environment variables.",
+    );
+  }
+
+  return createClient(webdavUrl, {
+    username,
+    password,
+  });
 };
 
-const client = createClient(process.env.NEXTCLOUD_WEBDAV_URL!, {
-  username: process.env.NEXTCLOUD_USER!,
-  password: process.env.NEXTCLOUD_PASSWORD!,
-});
+// 2. Create remote directories
+export const ensureRemoteDir = async (remoteDirPath: string): Promise<void> => {
+  const client = getClient();
 
-export const ensureRemoteDir = async (remoteDirPath: string) => {
-  const parts = remoteDirPath.split("/").filter(Boolean);
+  const cleanPath = remoteDirPath.replace(/^\/+|\/+$/g, "");
+  const parts = cleanPath.split("/").filter(Boolean);
+
   let currentPath = "";
+
+  console.log("[WebDAV] Ensuring remote directory:", cleanPath);
+
   for (const part of parts) {
-    currentPath += `/${part}`;
+    currentPath = currentPath ? `${currentPath}/${part}` : part;
+
     try {
       const exists = await client.exists(currentPath);
+
+      console.log("[WebDAV] Directory check:", {
+        path: currentPath,
+        exists,
+      });
+
       if (!exists) {
         await client.createDirectory(currentPath);
+
+        console.log("[WebDAV] Directory created:", currentPath);
       }
-    } catch (err) {
-      // Folder age theke thakle ba create korte gele error ignore korbe
+    } catch (error) {
+      console.error("[WebDAV] Directory operation failed:", currentPath, error);
+
+      // Do not silently ignore permission or connection errors.
+      throw error;
     }
   }
 };
 
-// HLS Folder Upload (Media Server Specific - Supports Subfolders & Cleanup)
+// 3. Recursive HLS folder upload
 export const uploadFolderToCloud = async (
   localDirPath: string,
   remoteDirPath: string,
-) => {
-  await ensureRemoteDir(remoteDirPath);
+): Promise<void> => {
+  console.log("[WebDAV] Starting folder upload:", {
+    localDirPath,
+    remoteDirPath,
+    localDirectoryExists: fs.existsSync(localDirPath),
+  });
+
+  const client = getClient();
 
   if (!fs.existsSync(localDirPath)) {
     throw new Error(`Local directory not found: ${localDirPath}`);
   }
 
-  const entries = fs.readdirSync(localDirPath, { withFileTypes: true });
+  // Create/check the destination directory
+  await ensureRemoteDir(remoteDirPath);
+
+  const entries = fs.readdirSync(localDirPath, {
+    withFileTypes: true,
+  });
+
+  console.log("[WebDAV] Local directory entries:", {
+    directory: localDirPath,
+    count: entries.length,
+    names: entries.map((entry) => entry.name),
+  });
 
   for (const entry of entries) {
     const localFilePath = path.join(localDirPath, entry.name);
-    const remoteFilePath = `${remoteDirPath}/${entry.name}`;
+
+    const cleanRemoteDir = remoteDirPath.replace(/\/+$/, "");
+    const remoteFilePath = `${cleanRemoteDir}/${entry.name}`;
 
     if (entry.isDirectory()) {
-      // Recurse for subdirectories if any exist
+      console.log("[WebDAV] Processing subdirectory:", {
+        local: localFilePath,
+        remote: remoteFilePath,
+      });
+
       await uploadFolderToCloud(localFilePath, remoteFilePath);
-    } else {
-      // Upload file via stream
+
+      continue;
+    }
+
+    const localStats = fs.statSync(localFilePath);
+
+    console.log("[WebDAV] Uploading file:", {
+      local: localFilePath,
+      remote: remoteFilePath,
+      sizeBytes: localStats.size,
+    });
+
+    if (localStats.size === 0) {
+      throw new Error(`Local file is empty: ${localFilePath}`);
+    }
+
+    try {
       const fileStream = fs.createReadStream(localFilePath);
+
       await client.putFileContents(remoteFilePath, fileStream, {
         overwrite: true,
       });
-      // Delete local file after successful upload
-      fs.unlinkSync(localFilePath);
+
+      console.log("[WebDAV] putFileContents completed:", remoteFilePath);
+
+      // 4. Verify the uploaded remote file
+      const remoteExists = await client.exists(remoteFilePath);
+
+      console.log("[WebDAV] Remote file verification:", {
+        path: remoteFilePath,
+        exists: remoteExists,
+      });
+
+      if (!remoteExists) {
+        throw new Error(`Remote file verification failed: ${remoteFilePath}`);
+      }
+
+      // Verify remote file size where supported
+      const remoteStat = await client.stat(remoteFilePath);
+      const remoteSize = Number(remoteStat.size);
+
+      console.log("[WebDAV] Upload size verification:", {
+        path: remoteFilePath,
+        localSizeBytes: localStats.size,
+        remoteSizeBytes: remoteSize,
+        sizeMatches: remoteSize === localStats.size,
+      });
+
+      if (Number.isFinite(remoteSize) && remoteSize !== localStats.size) {
+        throw new Error(
+          `File size mismatch for ${remoteFilePath}: local=${localStats.size}, remote=${remoteSize}`,
+        );
+      }
+
+      // IMPORTANT:
+      // Keep local HLS files until upload verification succeeds.
+      // Do not delete files during debugging.
+      console.log("[WebDAV] Upload verified successfully:", remoteFilePath);
+    } catch (error) {
+      console.error("[WebDAV] File upload/verification failed:", {
+        local: localFilePath,
+        remote: remoteFilePath,
+        error,
+      });
+
+      throw error;
     }
   }
 
-  // Remove local directory after all files inside are uploaded and deleted
-  try {
-    fs.rmdirSync(localDirPath);
-  } catch (err) {
-    // Ignore if directory cleanup fails or not empty
-  }
+  // 5. Confirm this directory has no remaining files
+  console.log("[WebDAV] Folder processing completed:", remoteDirPath);
+
+  // Intentionally do not remove local directories while debugging.
 };
