@@ -14,7 +14,8 @@
 
     "sourceMap": true,
     "declaration": true,
-    "noEmitOnError": true
+    "noEmitOnError": true,
+    "types": ["node"]
   },
 
   "include": ["src/**/*.ts"],
